@@ -17,7 +17,7 @@ A small API for selling a limited-stock product during a flash sale. It handles 
 - **Testing:** Postman or automated PHPUnit tests  
 
 ---
-
+````
 ## **Project Structure**
 
 ```bash
