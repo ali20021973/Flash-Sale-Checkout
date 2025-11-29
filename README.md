@@ -20,7 +20,7 @@ A small API for selling a limited-stock product during a flash sale. It handles 
 
 ## **Project Structure**
 
-```
+```bash
 
 app/
 ├─ Models/
