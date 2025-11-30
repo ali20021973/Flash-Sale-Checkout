@@ -55,15 +55,15 @@ routes/
 1. **Clone repository**
 
 ```bash
-git clone <repo_url>
-cd flash-sale-checkout
+git clone https://github.com/ali20021973/Flash-Sale-Checkout
+cd flashsale
 ````
 
 2. **Install dependencies**
 
 ```bash
 composer install
-npm install   # Optional, only if using Laravel Mix assets
+
 ```
 
 3. **Configure environment**
@@ -78,9 +78,12 @@ Update `.env` with your database and Redis:
 DB_CONNECTION=mysql
 DB_HOST=127.0.0.1
 DB_PORT=3306
-DB_DATABASE=flashsale
-DB_USERNAME=root
-DB_PASSWORD=
+
+security variables
+DB_DATABASE*******
+DB_USERNAME*******
+DB_PASSWORD*******
+
 CACHE_DRIVER=redis
 SESSION_DRIVER=redis
 QUEUE_CONNECTION=redis
@@ -226,6 +229,10 @@ php artisan test
 
 ---
 
+
+##requres 
+composer require predis/predis
+
 ## **Notes**
 
 * All timestamps are in **Africa/Cairo** timezone.
@@ -250,3 +257,24 @@ storage/logs/laravel.log
 ---
 
 
+
+this what i do new 
+
+RefreshFlashSaleCache extends Command
+{
+    protected $signature = 'flashsale:refresh-cache';
+    protected $description = 'Refresh flash sale stock cache in Redis every minute';
+
+
+This solves Out-of-Order delivery:
+Scenario:
+
+Webhook arrives at 10:00:00
+
+Order created at 10:00:01
+
+Webhook is saved in Redis (because order did not exist)
+
+After creating the order → we process the stored webhook
+
+Your system now handles this perfectly.

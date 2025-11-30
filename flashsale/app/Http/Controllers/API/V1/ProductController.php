@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API\V1;
 use App\Http\Controllers\Controller;
 use App\Models\Product;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Redis;
 
 class ProductController extends Controller
 {
@@ -13,21 +14,35 @@ class ProductController extends Controller
      */
     public function show($id): JsonResponse
     {
-        $product = Product::findOrFail($id);
+        try {
+            $product = Product::findOrFail($id);
 
-        // Calculate available stock (stock - active holds)
-        $activeHoldsQty = $product->holds()
-                                  ->where('status', 'active')
-                                  ->where('expires_at', '>', now())
-                                  ->sum('qty');
+            // Use Redis key for stock
+            $stockKey = "product_stock_{$id}";
 
-        $availableStock = max($product->stock - $activeHoldsQty, 0);
+            // Initialize Redis stock if not exists
+            if (!Redis::exists($stockKey)) {
+                Redis::set($stockKey, $product->stock,'EX',60);
+            }
 
-        return response()->json([
-            'id' => $product->id,
-            'name' => $product->name,
-            'price' => $product->price,
-            'stock' => $availableStock,
-        ]);
+            $availableStock = Redis::get($stockKey);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id' => $product->id,
+                    'name' => $product->name,
+                    'price' => $product->price,
+                    'stock' => (int) $availableStock,
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch product.',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 }

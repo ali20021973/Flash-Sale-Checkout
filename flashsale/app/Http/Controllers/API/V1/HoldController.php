@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Hold;
 use App\Models\Product;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use Illuminate\Http\JsonResponse;
 
 class HoldController extends Controller
@@ -20,35 +20,51 @@ class HoldController extends Controller
 
         $productId = $request->product_id;
         $qty = $request->qty;
+        $stockKey = "product_stock_{$productId}";
 
         try {
-            $hold = DB::transaction(function () use ($productId, $qty) {
+            // Initialize stock if not exists
+            if (!Redis::exists($stockKey)) {
+                $product = Product::findOrFail($productId);
+                Redis::set($stockKey, $product->stock);
+            }
 
-                $product = Product::lockForUpdate()->findOrFail($productId);
+            // Redis atomic decrement
+            Redis::watch($stockKey);
+            $currentStock = (int) Redis::get($stockKey);
 
-                if ($qty > $product->availableStock()) {
-                    return response()->json([
-                        'message' => 'Not enough stock available'
-                    ], 409); // Conflict
-                }
+            if ($currentStock < $qty) {
+                Redis::unwatch();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Not enough stock available'
+                ], 409);
+            }
 
-                return Hold::create([
-                    'product_id' => $productId,
-                    'qty' => $qty,
-                    'status' => 'active',
-                    'expires_at' => now()->addMinutes(2),
-                ]);
-            }, 5); // 5 retries if deadlock
+            $tx = Redis::multi();
+            $tx->decrby($stockKey, $qty);
+            $tx->exec();
 
-            if ($hold instanceof JsonResponse) return $hold;
+            // Save hold in DB
+            $hold = Hold::create([
+                'product_id' => $productId,
+                'qty' => $qty,
+                'status' => 'active',
+                'expires_at' => now()->addMinutes(2),
+            ]);
 
             return response()->json([
+                'success' => true,
                 'hold_id' => $hold->id,
                 'expires_at' => $hold->expires_at
             ], 201);
 
         } catch (\Exception $e) {
-            return response()->json(['message' => 'Failed to create hold', 'error' => $e->getMessage()], 500);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to create hold',
+                'error' => $e->getMessage()
+            ], 500);
         }
     }
 }

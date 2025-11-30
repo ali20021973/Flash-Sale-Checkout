@@ -1,21 +1,19 @@
 <?php
-
 namespace App\Http\Controllers\API\V1;
 
 use App\Http\Controllers\Controller;
+use Illuminate\Http\Request;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 use App\Models\Hold;
 use App\Models\Order;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Http\JsonResponse;
+use App\Http\Controllers\Api\V1\PaymentWebhookController;
 
 class OrderController extends Controller
 {
     public function store(Request $request): JsonResponse
     {
-        $request->validate([
-            'hold_id' => 'required|exists:holds,id',
-        ]);
+        $request->validate(['hold_id' => 'required|integer|exists:holds,id']);
 
         $holdId = $request->hold_id;
 
@@ -24,21 +22,24 @@ class OrderController extends Controller
                 $hold = Hold::lockForUpdate()->findOrFail($holdId);
 
                 if ($hold->status !== 'active' || $hold->isExpired()) {
-                    return response()->json(['message' => 'Hold is invalid or expired'], 409);
+                    abort(409, 'Hold is invalid or expired');
                 }
 
-                // Mark hold as used
+                // mark hold as used
                 $hold->status = 'used';
                 $hold->save();
 
-                // Create order in pre-payment state
-                return Order::create([
+                // create order
+                $order = Order::create([
                     'hold_id' => $hold->id,
                     'status' => 'pending_payment',
                 ]);
+
+                return $order;
             }, 5);
 
-            if ($order instanceof JsonResponse) return $order;
+            // process any pending webhooks that arrived before order creation
+            \App\Http\Controllers\Api\V1\PaymentWebhookController::processPendingWebhooks($order);
 
             return response()->json([
                 'order_id' => $order->id,
