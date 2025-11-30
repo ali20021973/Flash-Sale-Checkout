@@ -11,6 +11,9 @@ use Illuminate\Http\JsonResponse;
 
 class HoldController extends Controller
 {
+    /**
+     * Create a temporary hold
+     */
     public function store(Request $request): JsonResponse
     {
         $request->validate([
@@ -23,7 +26,7 @@ class HoldController extends Controller
         $stockKey = "product_stock_{$productId}";
 
         try {
-            // Initialize stock if not exists
+            // Initialize Redis stock if not exists
             if (!Redis::exists($stockKey)) {
                 $product = Product::findOrFail($productId);
                 Redis::set($stockKey, $product->stock);
@@ -65,6 +68,26 @@ class HoldController extends Controller
                 'message' => 'Failed to create hold',
                 'error' => $e->getMessage()
             ], 500);
+        }
+    }
+
+    /**
+     * Release expired holds and delete them
+     * Call this from Scheduler every minute
+     */
+    public static function releaseExpiredHolds()
+    {
+        $now = now();
+
+        $expiredHolds = Hold::where('status', 'active')
+                            ->where('expires_at', '<', $now)
+                            ->get();
+
+        foreach ($expiredHolds as $hold) {
+            $stockKey = "product_stock_{$hold->product_id}";
+            Redis::incrby($stockKey, $hold->qty); // Return stock to Redis
+
+            $hold->delete(); // Delete the expired hold from DB
         }
     }
 }

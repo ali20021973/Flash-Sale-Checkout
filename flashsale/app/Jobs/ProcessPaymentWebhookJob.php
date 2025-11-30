@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Support\Facades\Log;
 
 class ProcessPaymentWebhookJob implements ShouldQueue
 {
@@ -22,38 +23,63 @@ class ProcessPaymentWebhookJob implements ShouldQueue
 
     public function handle()
     {
+        // Basic validation of payload inside job
+        if (
+            empty($this->data['order_id']) ||
+            empty($this->data['idempotency_key']) ||
+            !isset($this->data['status']) ||
+            !in_array($this->data['status'], ['success','failure'])
+        ) {
+            Log::warning('Invalid webhook payload', ['data' => $this->data]);
+            return; // skip invalid payload
+        }
+
         $order = Order::find($this->data['order_id']);
-        if (!$order) return;
+        if (!$order) {
+            // Optionally re-queue or store again in Redis if order not yet created
+            Redis::rpush("pending_webhooks:order:{$this->data['order_id']}", json_encode($this->data));
+            Log::info("Order not found, webhook re-queued", ['order_id' => $this->data['order_id']]);
+            return;
+        }
 
         $key = "lock:order:{$order->id}";
 
         Redis::funnel($key)->limit(1)->block(5)->then(function () use ($order) {
 
-            DB::transaction(function () use ($order) {
+            try {
+                DB::transaction(function () use ($order) {
+                    $idempotencyKey = $this->data['idempotency_key'];
+                    $status = $this->data['status'];
 
-                $idempotencyKey = $this->data['idempotency_key'];
-                $status = $this->data['status'];
-
-                // already processed
-                if ($order->idempotency_key === $idempotencyKey) {
-                    return;
-                }
-
-                $order->idempotency_key = $idempotencyKey;
-
-                if ($status === 'success') {
-                    $order->status = 'paid';
-                } else {
-                    $order->status = 'cancelled';
-                    if ($order->hold) {
-                        $order->hold->status = 'active';
-                        $order->hold->save();
+                    // Skip if already processed
+                    if ($order->idempotency_key === $idempotencyKey) {
+                        return;
                     }
-                }
 
-                $order->save();
-            });
+                    $order->idempotency_key = $idempotencyKey;
 
+                    if ($status === 'success') {
+                        $order->status = 'paid';
+                    } else {
+                        $order->status = 'cancelled';
+
+                        // Release hold safely
+                        if ($order->hold) {
+                            $order->hold->status = 'active';
+                            $order->hold->save();
+                        }
+                    }
+
+                    $order->save();
+                });
+
+            } catch (\Exception $e) {
+                Log::error('Failed to process webhook inside job', [
+                    'order_id' => $order->id,
+                    'data' => $this->data,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         });
     }
 }
