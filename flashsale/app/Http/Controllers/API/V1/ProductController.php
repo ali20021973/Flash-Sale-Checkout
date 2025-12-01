@@ -3,52 +3,38 @@
 namespace App\Http\Controllers\API\V1;
 
 use App\Http\Controllers\Controller;
-use App\Models\Product;
+use App\Services\ProductService;
+use App\Http\Resources\ProductResource;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Redis;
-
-
 
 class ProductController extends Controller
 {
+    protected ProductService $service;
+
+    public function __construct(ProductService $service)
+    {
+        $this->service = $service;
+    }
+
     /**
      * GET /api/products/{id}
-     * Returns the product with accurate and up-to-date available stock
      */
-    public function show($id): JsonResponse
+    public function show(int $id): JsonResponse
     {
-        
-        //Scheduler calls releaseExpiredHolds() every minute but to be in saveside call releaseExpiredHolds during min.
-        \App\Http\Controllers\API\V1\HoldController::releaseExpiredHolds();
         try {
-            $stockKey = "product_stock_{$id}";
-
-            // Initialize stock in Redis if not exists
-            if (!Redis::exists($stockKey)) {
-                $product = Product::findOrFail($id);
-                Redis::set($stockKey, $product->stock);
-            }
-
-            $availableStock = (int) Redis::get($stockKey);
-
-            $product = Product::findOrFail($id);
+            $productDto = $this->service->getProductWithAvailableStock($id);
 
             return response()->json([
                 'success' => true,
-                'data' => [
-                    'id' => $product->id,
-                    'name' => $product->name,
-                    'price' => $product->price,
-                    'available_stock' => $availableStock,
-                ]
-            ]);
+                'data' => new ProductResource($productDto),
+            ], 200);
 
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch product.',
-                'error' => $e->getMessage()
-            ], 500);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json(['success' => false, 'message' => 'Product not found.'], 404);
+
+        } catch (\Throwable $e) {
+            // Generic safe error
+            return response()->json(['success' => false, 'message' => 'Unable to process request.'], 500);
         }
     }
 }

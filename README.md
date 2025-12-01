@@ -1,3 +1,80 @@
+# Flash-Sale Checkout — API (Laravel 12)
+
+This repository is a compact backend API used to demonstrate a safe, high-concurrency "flash sale" checkout workflow: Products -> temporary Holds -> Orders -> Payment Webhooks.
+
+Summary (one line)
+- Ensures no oversell by locking product rows during hold creation and converting holds into pre-payment orders. Webhooks are idempotent and drive final payment outcome.
+
+Important assumptions & invariants
+- Product stock is authoritative; availability = product.stock - sum(active holds).
+- Holds are short-lived (expires_at set to now + 2 minutes), status values: `active`, `used`, `expired`.
+- Orders are created only from valid, active holds and start as `pending_payment`. Order statuses: `pending_payment`, `paid`, `cancelled`.
+- Webhooks must be treated idempotently. The system records `idempotency_key` at the Order level and the DB schema includes a `payment_webhooks` table (suggested to persist raw payloads).
+
+Quick setup (local / dev)
+1. Install dependencies
+
+```powershell
+composer install
+npm install
+```
+
+2. Copy environment file and generate app key
+
+```powershell
+copy .env.example .env
+php artisan key:generate
+```
+
+3. Configure database and Redis in `.env` (MySQL + Redis expected). On Windows + XAMPP follow README's php_redis.dll steps if enabling PHP Redis extension.
+
+4. Run migrations + seed demo data
+
+```powershell
+php artisan migrate:fresh --seed
+```
+
+5. Run server
+
+```powershell
+php artisan serve
+# API base: http://127.0.0.1:8000/api/v1
+```
+
+Running tests
+- Unit + Feature tests: `php artisan test`.
+- This repository uses PHPUnit; tests live under `tests/Feature` and `tests/Unit`.
+
+Where to inspect runtime logs, metrics and cache
+- Laravel logs: `storage/logs/laravel.log`.
+- Redis is required for cache and concurrency flagging (CACHE_DRIVER and QUEUE_CONNECTION set to redis). Validate a working Redis server and PHP redis/predis installation.
+
+Folder structure (high level)
+- app/
+  - Models/: Product, Hold, Order, PaymentWebhook (relationships + helpers live here)
+  - Http/Controllers/API/V1/: ProductController, HoldController, OrderController, PaymentWebhookController
+  - Repositories/ & Services/: present — used for encapsulating business logic (see app/Repositories and app/Services)
+- database/: migrations + seeders used to build demo data
+- routes/api.php: API (prefixed with /api/v1)
+
+Developer-convention notes (follow these)
+- Use DB::transaction + lockForUpdate for stock/hold modifications (HoldController::store, OrderController::store). Keep the retry count used elsewhere (transaction(..., 5)).
+- Return HTTP 409 for domain conflicts (insufficient stock, expired/invalid hold).
+- Persist idempotency keys and avoid re-applying state transitions when the same webhook is replayed.
+
+Current limitations / recommended improvements
+- Webhook handling: the controller returns 404 if the order doesn't exist. For robust environments where webhooks may arrive before order creation, consider persisting webhook payloads (`payment_webhooks`) and/or queueing a retry processor to reconcile webhooks with orders once created. The DB schema already includes a `payment_webhooks` table; the controller should record incoming webhooks there and implement idempotent processing.
+- Add tests that simulate real concurrent requests (integration-level tests using multiple worker processes) to prove no oversell under high pressure.
+
+If you want I can: add end-to-end concurrency integration tests, switch webhook handling to store-first-then-process, and add structured logging/metrics for high-concurrency observability.
+
+---
+
+Generated / suggested test files (examples included under tests/Feature)
+- HoldConcurrencyTest.php — asserts no oversell when creating multiple holds against limited stock.
+- HoldExpiryTest.php — verifies expired holds return availability.
+- WebhookIdempotencyTest.php — verifies processing the same webhook twice does not double-apply.
+- WebhookBeforeOrderTest.php — documents expected behavior and recommended fix (persist webhook and process later). 
 
 
 ```markdown

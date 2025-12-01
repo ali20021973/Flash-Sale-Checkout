@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Order;
+use App\Models\PaymentWebhook;
 use Illuminate\Bus\Queueable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
@@ -23,7 +24,7 @@ class ProcessPaymentWebhookJob implements ShouldQueue
 
     public function handle()
     {
-        // Basic validation of payload inside job
+        
         if (
             empty($this->data['order_id']) ||
             empty($this->data['idempotency_key']) ||
@@ -50,6 +51,11 @@ class ProcessPaymentWebhookJob implements ShouldQueue
                 DB::transaction(function () use ($order) {
                     $idempotencyKey = $this->data['idempotency_key'];
                     $status = $this->data['status'];
+                     PaymentWebhook::create([
+                        'order_id'        => $order->id,
+                        'idempotency_key' => $this->data['idempotency_key'],
+                        'payload'         => $this->data
+                    ]);
 
                     // Skip if already processed
                     if ($order->idempotency_key === $idempotencyKey) {
